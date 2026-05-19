@@ -1,0 +1,15 @@
+# requirements.txt — Lists all Python packages your bot needs.
+# Install everything by running: pip install -r requirements.txt
+
+discord.py>=2.3.0     # The main Discord library
+python-dotenv>=1.0.0  # (Optional but good habit) Loads .env files for secrets
+aiohttp>=3.9.0        # Used internally by discord.py for web requests
+fastapi
+uvicorn
+httpx
+itsdangerous
+psutil
+psycopg2-binary
+python-multipart
+jinja2
+flask>=3.0.0
