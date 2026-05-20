@@ -28,9 +28,11 @@ class Help(commands.Cog):
     async def help_command(self, ctx):
         """Shows a list of all bot commands."""
 
+        p = ctx.prefix
+
         embed = discord.Embed(
             title="🤖 Bot Commands",
-            description="Here's everything I can do! Use `!` before each command.",
+            description=f"Here's everything I can do! Use `{p}` before each command.",
             color=COLOR_INFO
         )
 
@@ -38,7 +40,7 @@ class Help(commands.Cog):
         embed.add_field(
             name="🎫 Tickets",
             value=(
-                "`!ticket` — Post the ticket panel here (shows who ran it + panel / ticket numbers for tracking)\n"
+                f"`{p}ticket` — Post the ticket panel here\n"
                 "Then click **Open a Ticket** to open your private ticket."
             ),
             inline=False
@@ -48,8 +50,8 @@ class Help(commands.Cog):
         embed.add_field(
             name="💡 Suggestions",
             value=(
-                "`!suggest <idea>` — Submit a suggestion\n"
-                "Example: `!suggest Add a music bot`"
+                f"`{p}suggest <idea>` — Submit a suggestion\n"
+                f"Example: `{p}suggest Add a music bot`"
             ),
             inline=False
         )
@@ -58,17 +60,36 @@ class Help(commands.Cog):
         embed.add_field(
             name="💬 Feedback",
             value=(
-                "`!feedback <type> <message>` — Send feedback to staff\n"
+                f"`{p}feedback <type> <message>` — Send feedback to staff\n"
                 "**Types:** `general` | `bug` | `idea` | `compliment`\n"
-                "Example: `!feedback bug The bot crashed`"
+                f"Example: `{p}feedback bug The bot crashed`"
             ),
             inline=False
         )
 
+        # ── Admin Config commands (only shown to administrators) ──
+        if ctx.author.guild_permissions.administrator:
+            embed.add_field(
+                name="⚙️ Admin Configuration (Admin-only)",
+                value=(
+                    f"`{p}show_config` — View current server settings\n"
+                    f"`{p}set_prefix <prefix>` — Set server prefix\n"
+                    f"`{p}set_suggestion_channel <#channel>` — Set suggestion channel\n"
+                    f"`{p}set_feedback_channel <#channel>` — Set feedback channel\n"
+                    f"`{p}set_resolved_channel <#channel>` — Set resolved ticket logs channel\n"
+                    f"`{p}set_staff_role <@role>` — Set staff role for tickets\n"
+                    f"`{p}set_ticket_admin_role <@role>` — Set role to receive ticket DMs\n"
+                    f"`{p}set_ticket_category <id>` — Set main ticket category\n"
+                    f"`{p}set_new_ticket_category <id>` — Set new ticket category\n"
+                    f"`{p}set_working_ticket_category <id>` — Set active ticket category"
+                ),
+                inline=False
+            )
+
         # ── Help commands ──────────────────────────────────────
         embed.add_field(
             name="❓ Help",
-            value="`!help` — Show this message",
+            value=f"`{p}help` — Show this message",
             inline=False
         )
 
