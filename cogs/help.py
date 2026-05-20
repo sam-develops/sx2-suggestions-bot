@@ -146,8 +146,9 @@ class Help(commands.Cog):
                     f"I couldn't find the channel/category you specified: `{error.argument}`\n\n"
                     "**Possible reasons:**\n"
                     "• The channel or category ID/mention is incorrect.\n"
+                    "• You passed a **text channel** (like `#tickets`) instead of a **Category folder** (like `TICKETS`).\n"
                     "• The channel is in a different server.\n"
-                    "• I do not have permission to view that channel."
+                    "• I do not have permission to view that channel/category."
                 ),
                 color=COLOR_WARNING
             )
