@@ -149,8 +149,26 @@ def _panel_counter_path() -> Path:
     )
 
 
-def next_panel_sequence(guild_id: int) -> int:
-    """Persistent panel # per guild (each !ticket post gets the next number)."""
+async def _get_guild_setting(bot, guild_id: int, key: str, fallback):
+    if not hasattr(bot, "db_manager"):
+        return fallback
+    return await bot.db_manager.get_setting_value(guild_id, key, fallback)
+
+
+async def next_panel_sequence(bot, guild_id: int) -> int:
+    """Persistent panel # per guild (uses Supabase, falls back to local counter)."""
+    if bot.db_manager.client:
+        try:
+            # Check settings
+            settings = await bot.db_manager.get_settings(guild_id)
+            current = settings.get("panel_counter", 0) or 0
+            new_val = current + 1
+            await bot.db_manager.update_setting(guild_id, "panel_counter", new_val)
+            return new_val
+        except Exception as e:
+            print(f"[tickets] Failed to increment panel counter in Supabase: {e}")
+
+    # Fallback to local json
     path = _panel_counter_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     data: dict = {}
@@ -169,8 +187,17 @@ def next_panel_sequence(guild_id: int) -> int:
     return n
 
 
-def _next_ticket_id(guild: discord.Guild) -> int:
-    """Generate the next numeric ticket ID by scanning current channels."""
+async def _next_ticket_id(bot, guild: discord.Guild) -> int:
+    """Generate the next numeric ticket ID. First queries Supabase, then falls back to channel scan."""
+    if bot.db_manager.client:
+        try:
+            response = await bot.db_manager.client.table("tickets").select("ticket_number").eq("guild_id", guild.id).order("ticket_number", desc=True).limit(1).execute()
+            if response.data and len(response.data) > 0:
+                return int(response.data[0]["ticket_number"]) + 1
+            return 1
+        except Exception as e:
+            print(f"[tickets] Failed to fetch next ticket ID from Supabase: {e}")
+
     max_ticket_id = 0
     for channel in guild.text_channels:
         meta = _parse_ticket_meta(channel)
@@ -180,11 +207,15 @@ def _next_ticket_id(guild: discord.Guild) -> int:
     return max_ticket_id + 1
 
 
-def _notify_roles_for_guild(guild: discord.Guild) -> list[discord.Role]:
+async def _notify_roles_for_guild(bot, guild: discord.Guild) -> list[discord.Role]:
     """Roles to ping in-ticket (ticket admins first, then staff if different)."""
     roles: list[discord.Role] = []
     seen: set[int] = set()
-    for raw in (TICKET_ADMIN_NOTIFY_ROLE_ID, STAFF_ROLE_ID):
+    
+    admin_notify_rid = await _get_guild_setting(bot, guild.id, "ticket_admin_notify_role_id", TICKET_ADMIN_NOTIFY_ROLE_ID)
+    staff_rid = await _get_guild_setting(bot, guild.id, "staff_role_id", STAFF_ROLE_ID)
+    
+    for raw in (admin_notify_rid, staff_rid):
         rid = _safe_category_id(raw)
         if not rid:
             continue
@@ -197,6 +228,7 @@ def _notify_roles_for_guild(guild: discord.Guild) -> list[discord.Role]:
 
 
 async def _dm_ticket_admins(
+    bot,
     guild: discord.Guild,
     channel: discord.TextChannel,
     opener: discord.abc.User,
@@ -208,9 +240,12 @@ async def _dm_ticket_admins(
     The old guild.chunk(cache=True) call was the source of the 1-2 minute delay.
     Server Members Intent must be ON in the Developer Portal (you've confirmed it is).
     """
-    notify_rid = _safe_category_id(TICKET_ADMIN_NOTIFY_ROLE_ID)
+    admin_notify_rid = await _get_guild_setting(bot, guild.id, "ticket_admin_notify_role_id", TICKET_ADMIN_NOTIFY_ROLE_ID)
+    staff_rid = await _get_guild_setting(bot, guild.id, "staff_role_id", STAFF_ROLE_ID)
+
+    notify_rid = _safe_category_id(admin_notify_rid)
     if notify_rid is None:
-        notify_rid = _safe_category_id(STAFF_ROLE_ID)
+        notify_rid = _safe_category_id(staff_rid)
     if notify_rid is None:
         print(
             "[tickets] DM skip: no TICKET_ADMIN_NOTIFY_ROLE_ID / STAFF_ROLE_ID configured"
@@ -249,6 +284,7 @@ async def _dm_ticket_admins(
 
 
 async def _send_staff_role_ping_line(
+    bot,
     channel: discord.TextChannel,
     guild: discord.Guild,
     user: discord.abc.User,
@@ -258,7 +294,7 @@ async def _send_staff_role_ping_line(
     Ping configured roles inside the ticket channel. Works even when member cache/DMs fail.
     Bot needs permission to mention those roles (mentionable role OR bot **Mention @everyone** perm).
     """
-    roles = _notify_roles_for_guild(guild)
+    roles = await _notify_roles_for_guild(bot, guild)
     if not roles:
         return False
     mentions = " ".join(r.mention for r in roles)
@@ -313,17 +349,21 @@ class TicketControlsView(discord.ui.View):
         new_topic = _build_ticket_topic(tid_num, op_num, "working", created)
 
         # Prefer the dedicated WORKING category only (fallback to TICKET_CATEGORY caused no-op when both matched).
+        db = interaction.client.db_manager
+        cat_work_id = await db.get_setting_value(guild.id, "ticket_working_category_id", TICKET_WORKING_CATEGORY_ID)
+        cat_fallback_id = await db.get_setting_value(guild.id, "ticket_category_id", TICKET_CATEGORY_ID)
+
         working_category = await _pick_category(
             guild,
             interaction.client,
-            _safe_category_id(TICKET_WORKING_CATEGORY_ID),
+            _safe_category_id(cat_work_id),
             None,
         )
         if working_category is None:
             working_category = await _pick_category(
                 guild,
                 interaction.client,
-                _safe_category_id(TICKET_CATEGORY_ID),
+                _safe_category_id(cat_fallback_id),
                 None,
             )
 
@@ -351,6 +391,13 @@ class TicketControlsView(discord.ui.View):
                     topic=new_topic, reason=f"Ticket #{ticket_id} marked working"
                 )
                 move_note = f"\n\n📁 Already under **{working_category.name}**."
+            
+            # Log working status in Supabase
+            if db.client:
+                try:
+                    await db.client.table("tickets").update({"status": "working"}).eq("channel_id", channel.id).execute()
+                except Exception as e:
+                    print(f"❌ [Tickets] Failed to update status to 'working' in Supabase: {e}")
         except discord.Forbidden:
             move_note = (
                 "\n\n❌ **Missing permission** to move or edit this channel. Give my role **Manage Channels** "
@@ -386,7 +433,9 @@ class TicketControlsView(discord.ui.View):
         if opener_id and opener_id.isdigit():
             opener_mention = f"<@{opener_id}>"
 
-        log_channel_id = _safe_category_id(RESOLVED_TICKETS_CHANNEL_ID)
+        db = interaction.client.db_manager
+        res_ch_id = await db.get_setting_value(guild.id, "resolved_tickets_channel_id", RESOLVED_TICKETS_CHANNEL_ID)
+        log_channel_id = _safe_category_id(res_ch_id)
         log_channel = guild.get_channel(log_channel_id) if log_channel_id else None
 
         if isinstance(log_channel, discord.TextChannel):
@@ -404,6 +453,16 @@ class TicketControlsView(discord.ui.View):
             log_embed.add_field(name="Channel ID", value=f"`{channel.id}`", inline=True)
             log_embed.add_field(name="Guild", value=f"`{guild.name}`", inline=True)
             await log_channel.send(embed=log_embed)
+
+        # Update status in Supabase
+        if db.client:
+            try:
+                await db.client.table("tickets").update({
+                    "status": "resolved",
+                    "closed_at": datetime.now(timezone.utc).isoformat()
+                }).eq("channel_id", channel.id).execute()
+            except Exception as e:
+                print(f"❌ [Tickets] Failed to update status to 'resolved' in Supabase: {e}")
 
         await interaction.response.send_message(
             f"✅ Ticket **#{ticket_id}** resolved. Closing channel in 5 seconds...",
@@ -438,19 +497,21 @@ class OpenTicketButton(discord.ui.View):
             return
 
         # ── Find the ticket category ──────────────────────────
+        db = interaction.client.db_manager
+        cat_new_id = await db.get_setting_value(guild.id, "ticket_new_category_id", TICKET_NEW_CATEGORY_ID)
+        cat_fallback_id = await db.get_setting_value(guild.id, "ticket_category_id", TICKET_CATEGORY_ID)
+
         # Tickets will be created inside this category folder
         category = await _pick_category(
             guild,
             interaction.client,
-            _safe_category_id(TICKET_NEW_CATEGORY_ID),
-            _safe_category_id(TICKET_CATEGORY_ID),
+            _safe_category_id(cat_new_id),
+            _safe_category_id(cat_fallback_id),
         )
 
         if category is None:
             await interaction.response.send_message(
-                "❌ **Ticket category not found.** Ask an admin to set `TICKET_NEW_CATEGORY_ID` / "
-                "`TICKET_CATEGORY_ID` in `config.py` to a **category** ID (right‑click the category "
-                "folder → Copy ID), then restart the bot.",
+                "❌ **Ticket category not found.** Ask an admin to set it up using `!set_new_ticket_category` or `!set_ticket_category`.",
                 ephemeral=True,
             )
             return
@@ -498,7 +559,7 @@ class OpenTicketButton(discord.ui.View):
         }
 
         # Staff + ticket-admin roles must see the channel (not only staff ID — admins may use a separate role).
-        for role in _notify_roles_for_guild(guild):
+        for role in await _notify_roles_for_guild(interaction.client, guild):
             overwrites.setdefault(role, ticket_member_perms)
 
         # ── Create the ticket channel ─────────────────────────
@@ -515,12 +576,25 @@ class OpenTicketButton(discord.ui.View):
                 category=category, reason="Place ticket under configured category"
             )
 
-        ticket_id = _next_ticket_id(guild)
+        ticket_id = await _next_ticket_id(interaction.client, guild)
         created_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         await channel.edit(
             topic=_build_ticket_topic(ticket_id, user.id, "new", created_ts),
             reason=f"Ticket #{ticket_id} metadata initialized",
         )
+
+        # Log the ticket in Supabase
+        if db.client:
+            try:
+                await db.client.table("tickets").insert({
+                    "ticket_number": ticket_id,
+                    "guild_id": guild.id,
+                    "channel_id": channel.id,
+                    "opener_id": user.id,
+                    "status": "open"
+                }).execute()
+            except Exception as e:
+                print(f"❌ [Tickets] Failed to log new ticket to Supabase: {e}")
 
         # ── 1) GREETING FIRST (instant, so user sees activity right away) ──
         try:
@@ -540,7 +614,7 @@ class OpenTicketButton(discord.ui.View):
             return
 
         # ── 2) ROLE PING SECOND (also instant — uses cached roles) ──
-        ping_ok = await _send_staff_role_ping_line(channel, guild, user, ticket_id)
+        ping_ok = await _send_staff_role_ping_line(interaction.client, channel, guild, user, ticket_id)
 
         # ── 3) Confirm to the user RIGHT NOW (don't wait for DMs) ──
         await interaction.followup.send(
@@ -555,12 +629,15 @@ class OpenTicketButton(discord.ui.View):
             """Send the info embed + DM staff. Runs after the user already has confirmation."""
             try:
                 sent_dm, failed_dm = await _dm_ticket_admins(
-                    guild, channel, user, ticket_id
+                    interaction.client, guild, channel, user, ticket_id
                 )
             except Exception as exc:
                 print(f"[tickets] Background DM task failed: {exc}")
                 traceback.print_exc()
                 sent_dm, failed_dm = 0, 0
+
+            notify_rid = await db.get_setting_value(guild.id, "ticket_admin_notify_role_id", TICKET_ADMIN_NOTIFY_ROLE_ID)
+            staff_rid = await db.get_setting_value(guild.id, "staff_role_id", STAFF_ROLE_ID)
 
             if sent_dm:
                 notify_field = (
@@ -576,16 +653,14 @@ class OpenTicketButton(discord.ui.View):
                     "✅ Staff were **pinged with @roles** in this channel (see message above). "
                     "Use this if DMs are blocked."
                 )
-            elif _safe_category_id(TICKET_ADMIN_NOTIFY_ROLE_ID) or _safe_category_id(
-                STAFF_ROLE_ID
-            ):
+            elif _safe_category_id(notify_rid) or _safe_category_id(staff_rid):
                 notify_field = (
                     "⚠️ No DM and **role ping failed** — give the bot **Send Messages** + "
                     "**Mention @everyone, @here and All Roles**, or make ticket roles **mentionable**. "
                     "Also enable **Server Members Intent** in the Developer Portal for DMs."
                 )
             else:
-                notify_field = "⚠️ Set `TICKET_ADMIN_NOTIFY_ROLE_ID` / `STAFF_ROLE_ID` in `config.py`."
+                notify_field = "⚠️ Set staff roles in your configuration command `!show_config`."
 
             embed = discord.Embed(
                 title=f"🎫 Support Ticket #{ticket_id}",
@@ -630,13 +705,7 @@ class Tickets(commands.Cog):
         # Persistent buttons (timeout=None + custom_id) must be registered for interactions after restarts.
         self.bot.add_view(OpenTicketButton())
         self.bot.add_view(TicketControlsView())
-        # Confirm config role IDs after restart (helps catch tuple/str mistakes in config.py).
-        sr = _safe_category_id(STAFF_ROLE_ID)
-        ta = _safe_category_id(TICKET_ADMIN_NOTIFY_ROLE_ID)
-        print(
-            f"[cogs.tickets] STAFF_ROLE_ID → {sr!r} (None means invalid or placeholder)"
-        )
-        print(f"[cogs.tickets] TICKET_ADMIN_NOTIFY_ROLE_ID → {ta!r}")
+        print("[cogs.tickets] Registered persistent buttons and ticket control views.")
 
     # ── !ticket command ───────────────────────────────────────
     # Post the ticket panel in the current channel (any member can run it).
@@ -650,8 +719,8 @@ class Tickets(commands.Cog):
             return
 
         author = ctx.author
-        panel_no = next_panel_sequence(ctx.guild.id)
-        next_ticket_no = _next_ticket_id(ctx.guild)
+        panel_no = await next_panel_sequence(self.bot, ctx.guild.id)
+        next_ticket_no = await _next_ticket_id(self.bot, ctx.guild)
 
         embed = discord.Embed(
             title="🎫 Support Tickets",

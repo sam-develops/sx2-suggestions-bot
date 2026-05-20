@@ -124,7 +124,10 @@ class Feedback(commands.Cog):
             return
 
         # ── Find the feedback channel ──────────────────────────
-        channel = ctx.guild.get_channel(FEEDBACK_CHANNEL_ID)
+        channel_id = await self.bot.db_manager.get_setting_value(
+            ctx.guild.id, "feedback_channel_id", FEEDBACK_CHANNEL_ID
+        )
+        channel = ctx.guild.get_channel(channel_id)
 
         if channel is None:
             embed = discord.Embed(
@@ -157,6 +160,18 @@ class Feedback(commands.Cog):
 
         # ── Send to the feedback channel ───────────────────────
         await channel.send(embed=embed)
+
+        # ── Log the feedback in Supabase ───────────────────────
+        if self.bot.db_manager.client:
+            try:
+                await self.bot.db_manager.client.table("feedback").insert({
+                    "guild_id": ctx.guild.id,
+                    "author_id": ctx.author.id,
+                    "feedback_type": feedback_type,
+                    "content": message
+                }).execute()
+            except Exception as e:
+                print(f"❌ [Feedback] Failed to log to Supabase: {e}")
 
         # ── Confirm to the user ────────────────────────────────
         confirm = discord.Embed(

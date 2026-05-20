@@ -3,68 +3,70 @@
 #
 # This lets users submit suggestions using the !suggest command.
 # The bot posts the suggestion in a special channel where others
-# can vote with 👍 or 👎 reactions.
+# can vote with 👍 or 👎 reactions. It logs all suggestions in Supabase.
 # ============================================================
 
 import discord
 from discord.ext import commands
-
 from config import SUGGESTION_CHANNEL_ID, COLOR_INFO, COLOR_ERROR, COLOR_SUCCESS
 
-
-# ── SUGGESTIONS COG ───────────────────────────────────────────
 class Suggestions(commands.Cog):
-
     def __init__(self, bot):
         self.bot = bot
 
-    # ── !suggest command ──────────────────────────────────────
-    # Usage: !suggest Your idea here
-    # Example: !suggest Add a music bot to the server
     @commands.command(name="suggest")
     async def suggest(self, ctx, *, suggestion: str):
         """
         Submit a suggestion to the suggestions channel.
         Usage: !suggest <your idea>
         """
-
-        # ── Find the suggestions channel ──────────────────────
-        # We look up the channel using its ID from config.py
-        channel = ctx.guild.get_channel(SUGGESTION_CHANNEL_ID)
+        # ── Find the suggestions channel dynamically ──────────
+        # Fetch the channel ID from Supabase (fallback to config.py)
+        channel_id = await self.bot.db_manager.get_setting_value(
+            ctx.guild.id, "suggestion_channel_id", SUGGESTION_CHANNEL_ID
+        )
+        channel = ctx.guild.get_channel(channel_id)
 
         if channel is None:
-            # If the channel wasn't found, tell the user
-            await ctx.send(
-                "❌ Suggestion channel not found. Please ask an admin to set it up.",
-                delete_after=10  # Auto-delete after 10 seconds
+            embed = discord.Embed(
+                description="❌ Suggestion channel not found. Please ask an admin to configure it using `!set_suggestion_channel`.",
+                color=COLOR_ERROR
             )
+            await ctx.send(embed=embed, delete_after=10)
             return
 
         # ── Build the suggestion embed ─────────────────────────
-        # An "embed" is a fancy formatted message with colors and fields
         embed = discord.Embed(
             title="💡 New Suggestion",
-            description=suggestion,      # The actual suggestion text
+            description=suggestion,
             color=COLOR_INFO
         )
-
-        # Show who made the suggestion
         embed.set_author(
             name=ctx.author.display_name,
             icon_url=ctx.author.display_avatar.url
         )
-
-        # Add a footer with the suggestion status
         embed.set_footer(text="React with 👍 or 👎 to vote!")
-        embed.timestamp = ctx.message.created_at  # Show when it was submitted
+        embed.timestamp = ctx.message.created_at
 
         # ── Send the suggestion to the suggestions channel ─────
         suggestion_message = await channel.send(embed=embed)
 
         # ── Add voting reactions automatically ─────────────────
-        # This adds the 👍 and 👎 so people don't have to type them
         await suggestion_message.add_reaction("👍")
         await suggestion_message.add_reaction("👎")
+
+        # ── Log the suggestion in Supabase ─────────────────────
+        if self.bot.db_manager.client:
+            try:
+                await self.bot.db_manager.client.table("suggestions").insert({
+                    "guild_id": ctx.guild.id,
+                    "message_id": suggestion_message.id,
+                    "author_id": ctx.author.id,
+                    "content": suggestion,
+                    "status": "pending"
+                }).execute()
+            except Exception as e:
+                print(f"❌ [Suggestions] Failed to log to Supabase: {e}")
 
         # ── Confirm to the user that it was submitted ──────────
         confirm_embed = discord.Embed(
@@ -74,10 +76,11 @@ class Suggestions(commands.Cog):
         await ctx.send(embed=confirm_embed, delete_after=10)
 
         # Delete the original command message to keep the channel tidy
-        await ctx.message.delete()
+        try:
+            await ctx.message.delete()
+        except discord.Forbidden:
+            pass
 
-    # ── Error handling for !suggest ───────────────────────────
-    # This runs if the user types !suggest without a message
     @suggest.error
     async def suggest_error(self, ctx, error):
         if isinstance(error, commands.MissingRequiredArgument):
@@ -94,7 +97,5 @@ class Suggestions(commands.Cog):
             )
             await ctx.send(embed=embed, delete_after=15)
 
-
-# ── SETUP FUNCTION ────────────────────────────────────────────
 async def setup(bot):
     await bot.add_cog(Suggestions(bot))

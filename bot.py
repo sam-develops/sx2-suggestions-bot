@@ -8,8 +8,8 @@ import sys
 import io
 # Fix: Windows terminals use cp1252 which can't show emojis.
 # This forces the terminal to use UTF-8 so emojis print correctly.
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
 
 # IMPORTANT: load_dotenv() must run BEFORE we import config.py
 # because config.py reads the TOKEN from env vars at import time.
@@ -24,6 +24,7 @@ import asyncio                        # Lets Discord run smoothly in the backgro
 from config import TOKEN, PREFIX, GUILD_ID  # Settings from config.py
 
 from keep_alive import keep_alive          # Import keep_alive to keep the bot awake on Render
+from utils.supabase_client import SupabaseManager
 
 # ── INTENTS ──────────────────────────────────────────────────
 # Intents = "permissions" that tell Discord what your bot is allowed to see.
@@ -32,11 +33,20 @@ intents = discord.Intents.default()
 intents.message_content = True        # Allows bot to READ message content (needed for commands)
 intents.members = True                # Allows bot to see server members
 
+# ── DYNAMIC PREFIX FUNCTION ──────────────────────────────────
+async def determine_prefix(bot_instance, message):
+    if not message.guild:
+        return PREFIX
+    return await bot_instance.db_manager.get_setting_value(message.guild.id, "prefix", PREFIX)
+
 # ── BOT OBJECT ───────────────────────────────────────────────
 # This creates your actual bot.
 # "command_prefix" = the symbol users type before commands (e.g. "!")
 # "intents" = the permissions we set above
-bot = commands.Bot(command_prefix=PREFIX, intents=intents)
+bot = commands.Bot(command_prefix=determine_prefix, intents=intents)
+
+# Attach Supabase manager to bot object
+bot.db_manager = SupabaseManager()
 
 
 # ── ON READY ─────────────────────────────────────────────────
@@ -80,6 +90,7 @@ async def load_cogs():
         "cogs.tickets",      # Ticket system
         "cogs.suggestions",  # Suggestion system
         "cogs.feedback",     # Feedback system
+        "cogs.settings",     # Server settings
         "cogs.help",         # Help & error handling
     ]
 
@@ -98,6 +109,10 @@ async def load_cogs():
 async def main():
     print("🚀 Starting bot...")
     keep_alive()              # Starts the background web server for Render/UptimeRobot
+    
+    # Connect to Supabase
+    await bot.db_manager.connect()
+    
     await load_cogs()         # Load all features first
     await bot.start(TOKEN)    # Then connect to Discord with our token
 
