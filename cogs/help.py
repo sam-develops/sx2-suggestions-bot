@@ -138,6 +138,35 @@ class Help(commands.Cog):
             )
             await ctx.send(embed=embed, delete_after=15)
 
+        # ── Channel Not Found ──────────────────────────────────
+        elif isinstance(error, commands.ChannelNotFound):
+            embed = discord.Embed(
+                title="🔍 Channel Not Found",
+                description=(
+                    f"I couldn't find the channel/category you specified: `{error.argument}`\n\n"
+                    "**Possible reasons:**\n"
+                    "• The channel or category ID/mention is incorrect.\n"
+                    "• The channel is in a different server.\n"
+                    "• I do not have permission to view that channel."
+                ),
+                color=COLOR_WARNING
+            )
+            await ctx.send(embed=embed, delete_after=15)
+
+        # ── Role Not Found ─────────────────────────────────────
+        elif isinstance(error, commands.RoleNotFound):
+            embed = discord.Embed(
+                title="🔍 Role Not Found",
+                description=(
+                    f"I couldn't find the role you specified: `{error.argument}`\n\n"
+                    "**Possible reasons:**\n"
+                    "• The role ID or mention is incorrect.\n"
+                    "• The role does not exist in this server."
+                ),
+                color=COLOR_WARNING
+            )
+            await ctx.send(embed=embed, delete_after=15)
+
         # ── Bad Argument (Invalid conversion) ──────────────────
         elif isinstance(error, commands.BadArgument):
             embed = discord.Embed(
