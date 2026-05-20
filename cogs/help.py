@@ -102,22 +102,21 @@ class Help(commands.Cog):
     # Instead of crashing silently, it tells the user what went wrong.
     @commands.Cog.listener()
     async def on_command_error(self, ctx, error):
+        p = ctx.prefix
 
         # ── Command not found ──────────────────────────────────
-        # User typed something like !abc which doesn't exist
         if isinstance(error, commands.CommandNotFound):
             embed = discord.Embed(
                 title="❓ Unknown Command",
                 description=(
                     f"I don't recognize that command.\n\n"
-                    f"Type `!help` to see all available commands."
+                    f"Type `{p}help` to see all available commands."
                 ),
                 color=COLOR_WARNING
             )
             await ctx.send(embed=embed, delete_after=10)
 
         # ── Missing permissions ────────────────────────────────
-        # User tried to use an admin-only command
         elif isinstance(error, commands.MissingPermissions):
             embed = discord.Embed(
                 title="🚫 No Permission",
@@ -127,34 +126,91 @@ class Help(commands.Cog):
             await ctx.send(embed=embed, delete_after=10)
 
         # ── Missing required argument ──────────────────────────
-        # User used a command but forgot to include required info
         elif isinstance(error, commands.MissingRequiredArgument):
             embed = discord.Embed(
                 title="⚠️ Missing Information",
                 description=(
-                    f"You're missing a required part of that command.\n\n"
-                    f"Type `!help` to see correct command usage."
+                    f"You are missing a required argument for this command.\n\n"
+                    f"**Required parameter:** `{error.param.name}`\n"
+                    f"Type `{p}help` to see correct command usage."
                 ),
                 color=COLOR_WARNING
             )
-            await ctx.send(embed=embed, delete_after=10)
+            await ctx.send(embed=embed, delete_after=15)
+
+        # ── Bad Argument (Invalid conversion) ──────────────────
+        elif isinstance(error, commands.BadArgument):
+            embed = discord.Embed(
+                title="⚠️ Invalid Parameter",
+                description=(
+                    f"One of the parameters you provided is invalid.\n\n"
+                    f"**Details:** {error}\n\n"
+                    f"Please make sure you tag/mention channels (`#channel`), roles (`@role`), or provide correct IDs."
+                ),
+                color=COLOR_WARNING
+            )
+            await ctx.send(embed=embed, delete_after=15)
 
         # ── Bot missing permissions ────────────────────────────
-        # The bot itself doesn't have the right permissions in the server
         elif isinstance(error, commands.BotMissingPermissions):
             embed = discord.Embed(
                 title="🔧 Bot Missing Permissions",
                 description=(
-                    "I don't have the permissions needed to do that.\n"
-                    "Please ask an admin to check my role permissions."
+                    "I don't have the permissions needed to perform that action.\n"
+                    "Please ask an administrator to check my server role permissions."
                 ),
                 color=COLOR_ERROR
             )
-            await ctx.send(embed=embed, delete_after=10)
+            await ctx.send(embed=embed, delete_after=15)
 
-        # ── All other errors ───────────────────────────────────
+        # ── Command Invoke Error ──────────────────────────────
+        elif isinstance(error, commands.CommandInvokeError):
+            original = error.original
+            
+            # Check for Discord Forbidden errors (e.g. DMs blocked, can't manage channels)
+            if isinstance(original, discord.Forbidden):
+                embed = discord.Embed(
+                    title="🚫 Action Forbidden",
+                    description=(
+                        "I am forbidden by Discord from completing this action.\n\n"
+                        "**Possibilities include:**\n"
+                        "• I do not have permission to manage/create channels in this category.\n"
+                        "• My role is placed below the target role/member in the server hierarchy.\n"
+                        "• The user has their Direct Messages (DMs) disabled."
+                    ),
+                    color=COLOR_ERROR
+                )
+                await ctx.send(embed=embed)
+            
+            # Check for Supabase / Postgrest Database Errors
+            elif "postgrest" in original.__class__.__module__.lower() or "supabase" in original.__class__.__module__.lower():
+                embed = discord.Embed(
+                    title="🗄️ Database Error",
+                    description=(
+                        "An error occurred while communicating with the database (Supabase).\n\n"
+                        f"**Error Details:** `{original}`\n\n"
+                        "Make sure your tables are correctly configured in the SQL Editor and RLS policies are enabled."
+                    ),
+                    color=COLOR_ERROR
+                )
+                await ctx.send(embed=embed)
+            
+            # Catch other unexpected exceptions
+            else:
+                embed = discord.Embed(
+                    title="💥 Unexpected Command Error",
+                    description=(
+                        f"An unexpected error occurred while executing `{ctx.command}`.\n\n"
+                        f"**Exception:** `{original.__class__.__name__}`\n"
+                        f"**Message:** `{original}`\n\n"
+                        "Please report this to a developer or server administrator."
+                    ),
+                    color=COLOR_ERROR
+                )
+                await ctx.send(embed=embed)
+
+        # ── Fallback ──────────────────────────────────────────
         else:
-            # Print the error to the console for debugging
             print(f"Unhandled error in command '{ctx.command}': {error}")
 
 
