@@ -94,7 +94,8 @@ class Help(commands.Cog):
                     f"`{p}set_ticket_admin_role <@role>` — Set role to receive ticket DMs\n"
                     f"`{p}set_ticket_category <id>` — Set main ticket category\n"
                     f"`{p}set_new_ticket_category <id>` — Set new ticket category\n"
-                    f"`{p}set_working_ticket_category <id>` — Set active ticket category"
+                    f"`{p}set_working_ticket_category <id>` — Set active ticket category\n"
+                    f"`{p}announce` — Open the interactive announcement builder"
                 ),
                 inline=False
             )

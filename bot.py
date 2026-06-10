@@ -91,6 +91,7 @@ async def load_cogs():
         "cogs.suggestions",  # Suggestion system
         "cogs.feedback",     # Feedback system
         "cogs.settings",     # Server settings
+        "cogs.announce",     # Announcement builder
         "cogs.help",         # Help & error handling
     ]
 
