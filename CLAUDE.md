@@ -130,6 +130,7 @@ Usable by Administrators, members with **Manage Server**, or the configured staf
 * `{p}set_ticket_category <Category Name or ID>`: Sets the default fallback category for ticket channels.
 * `{p}set_new_ticket_category <Category Name or ID>`: Sets the category for newly opened tickets.
 * `{p}set_working_ticket_category <Category Name or ID>`: Sets the category for active tickets staff are working on.
+* `{p}announce`: Launches the interactive visual Announcement builder panel.
 
 ---
 
