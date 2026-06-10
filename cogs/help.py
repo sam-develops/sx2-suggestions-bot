@@ -56,6 +56,19 @@ class Help(commands.Cog):
             inline=False
         )
 
+        # ── Suggestion review (staff & admins) ─────────────────
+        if ctx.author.guild_permissions.manage_guild or ctx.author.guild_permissions.administrator:
+            embed.add_field(
+                name="🛠️ Suggestion Review (Staff)",
+                value=(
+                    f"`{p}approve <#> [reason]` — Approve a suggestion\n"
+                    f"`{p}deny <#> [reason]` — Deny a suggestion\n"
+                    f"`{p}consider <#> [reason]` — Mark as under consideration\n"
+                    f"Example: `{p}approve 4 Great idea — adding it!`"
+                ),
+                inline=False
+            )
+
         # ── Feedback commands ──────────────────────────────────
         embed.add_field(
             name="💬 Feedback",

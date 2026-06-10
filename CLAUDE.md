@@ -10,7 +10,7 @@ The bot is built using `discord.py` (v2.0+) and connects asynchronously to a **S
 
 1. **`bot.py`**: The entry point. Connects to Discord and Supabase, loads extensions, starts the keep-alive server, and handles dynamic prefix resolution per-server.
 2. **`cogs/settings.py`**: Configuration cog for Administrators to change prefix, channels, categories, and roles dynamically.
-3. **`cogs/suggestions.py`**: Suggestion system that logs new ideas to the database.
+3. **`cogs/suggestions.py`**: Suggestion system — logs ideas, posts them with 👍/👎 voting, and provides a staff review workflow (approve/deny/consider) that recolours the message and DMs the author.
 4. **`cogs/feedback.py`**: Feedback logging system (supports general, bug, idea, and compliment types).
 5. **`cogs/tickets.py`**: Support ticket system using Discord Buttons and Views. Tracks ticket counts and states in the database.
 6. **`cogs/help.py`**: Custom help menu and advanced global error handler.
@@ -44,10 +44,15 @@ CREATE TABLE IF NOT EXISTS guild_settings (
 -- 2. Suggestions Log
 CREATE TABLE IF NOT EXISTS suggestions (
     id BIGSERIAL PRIMARY KEY,
-    suggestion_number BIGINT NOT NULL,
+    suggestion_number BIGINT NOT NULL,        -- per-guild number shown as #N
     guild_id BIGINT NOT NULL,
-    user_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,                  -- the suggestion author
+    message_id BIGINT,                        -- Discord message id (so reviews can edit it)
     content TEXT NOT NULL,
+    status VARCHAR(20) DEFAULT 'pending',     -- pending | approved | denied | considered
+    reviewer_id BIGINT,                       -- staff member who reviewed
+    review_reason TEXT,                       -- optional reason given on review
+    reviewed_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
 );
 
@@ -84,6 +89,7 @@ CREATE POLICY "Allow anon update on guild_settings" ON guild_settings FOR UPDATE
 -- suggestions policies
 CREATE POLICY "Allow anon select on suggestions" ON suggestions FOR SELECT TO anon USING (true);
 CREATE POLICY "Allow anon insert on suggestions" ON suggestions FOR INSERT TO anon WITH CHECK (true);
+CREATE POLICY "Allow anon update on suggestions" ON suggestions FOR UPDATE TO anon USING (true) WITH CHECK (true);
 
 -- feedback policies
 CREATE POLICY "Allow anon select on feedback" ON feedback FOR SELECT TO anon USING (true);
@@ -106,6 +112,12 @@ Prefixes are dynamic (`{p}` below represents the server's configured prefix, def
 * `{p}feedback <general|bug|idea|compliment> <message>`: Submits logged feedback to the staff.
 * `{p}ticket`: Spawns the persistent Support Ticket creation panel.
 * `{p}help`: Displays a list of commands.
+
+### Staff Suggestion-Review Commands
+Usable by Administrators, members with **Manage Server**, or the configured staff role. `<#>` is the suggestion's per-server number (shown as `#N` on the suggestion embed).
+* `{p}approve <#> [reason]`: Marks a suggestion Approved (green), stamps the decision on the original message, and DMs the author.
+* `{p}deny <#> [reason]`: Marks a suggestion Denied (red) and notifies the author.
+* `{p}consider <#> [reason]`: Marks a suggestion Under Consideration (orange) and notifies the author.
 
 ### Admin Configuration Commands
 * `{p}show_config`: Displays current settings for the server.
