@@ -209,7 +209,17 @@ class AnnouncementBuilderView(discord.ui.View):
             await interaction.response.send_message("❌ You are not the author of this builder.", ephemeral=True)
             return
 
-        self.target_channel = self.channel_select.values[0]
+        selected = self.channel_select.values[0]
+        # Resolve AppCommandChannel to standard Guild TextChannel
+        guild_channel = interaction.guild.get_channel(selected.id)
+        if not guild_channel:
+            try:
+                guild_channel = await interaction.guild.fetch_channel(selected.id)
+            except discord.HTTPException:
+                await interaction.response.send_message("❌ Could not resolve that channel. Please check my permissions.", ephemeral=True)
+                return
+
+        self.target_channel = guild_channel
         self.channel_select.placeholder = f"📢 Target: #{self.target_channel.name}"
         await self.update_view(interaction)
 
