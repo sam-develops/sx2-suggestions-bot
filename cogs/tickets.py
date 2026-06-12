@@ -478,58 +478,45 @@ class TicketControlsView(discord.ui.View):
 # ── OPEN TICKET BUTTON ────────────────────────────────────────
 # This button appears in the ticket panel message.
 # Users click it to create their own private ticket channel.
-class OpenTicketButton(discord.ui.View):
+# ── TICKET REASON MODAL ───────────────────────────────────────
+# This modal pops up when a user clicks the "Open a Ticket" button.
+# It collects the subject and issue description before creating the channel.
+class TicketReasonModal(discord.ui.Modal):
 
-    def __init__(self):
-        super().__init__(timeout=None)
+    def __init__(self, category: discord.CategoryChannel):
+        super().__init__(title="Open a Support Ticket")
+        self.category = category
 
-    @discord.ui.button(
-        label="🎫 Open a Ticket",
-        style=discord.ButtonStyle.primary,  # Blue button
-        custom_id="open_ticket",
-    )
-    async def open_ticket(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+        self.subject_input = discord.ui.TextInput(
+            label="Subject / Topic",
+            placeholder="e.g. Help with roles, bug report, billing query",
+            max_length=100,
+            required=True,
+        )
+        self.desc_input = discord.ui.TextInput(
+            label="Description of your issue",
+            style=discord.TextStyle.paragraph,
+            placeholder="Please detail your request here so staff can assist you quickly...",
+            max_length=1000,
+            required=True,
+        )
+
+        self.add_item(self.subject_input)
+        self.add_item(self.desc_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
         guild = interaction.guild
         user = interaction.user
         if guild is None:
             return
 
-        # ── Find the ticket category ──────────────────────────
-        db = interaction.client.db_manager
-        cat_new_id = await db.get_setting_value(guild.id, "ticket_new_category_id", TICKET_NEW_CATEGORY_ID)
-        cat_fallback_id = await db.get_setting_value(guild.id, "ticket_category_id", TICKET_CATEGORY_ID)
-
-        # Tickets will be created inside this category folder
-        category = await _pick_category(
-            guild,
-            interaction.client,
-            _safe_category_id(cat_new_id),
-            _safe_category_id(cat_fallback_id),
-        )
-
-        if category is None:
-            await interaction.response.send_message(
-                "❌ **Ticket category not found.** Ask an admin to set it up using `!set_new_ticket_category` or `!set_ticket_category`.",
-                ephemeral=True,
-            )
-            return
-
-        # ── Check if user already has an open ticket ──────────
-        # We look for a channel that starts with "ticket-" and has their name
-        existing = discord.utils.get(
-            guild.text_channels, name=f"ticket-{user.name.lower()}"
-        )
-        if existing:
-            await interaction.response.send_message(
-                f"❌ You already have an open ticket: {existing.mention}",
-                ephemeral=True,  # Only the user can see this message
-            )
-            return
-
-        # Creating the channel + edits can exceed 3s; defer so Discord doesn't expire the interaction.
+        # Defer so Discord interaction doesn't expire during text channel creation
         await interaction.response.defer(ephemeral=True)
+
+        subject = self.subject_input.value
+        description = self.desc_input.value
+
+        db = interaction.client.db_manager
 
         # ── Set permissions for the new ticket channel ────────
         # By default nobody can see it, except the user and staff
@@ -539,8 +526,8 @@ class OpenTicketButton(discord.ui.View):
             view_channel=True,
             send_messages=True,
             read_message_history=True,
-            attach_files=True,
             embed_links=True,
+            attach_files=True,
         )
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(
@@ -565,15 +552,15 @@ class OpenTicketButton(discord.ui.View):
         # ── Create the ticket channel ─────────────────────────
         channel = await guild.create_text_channel(
             name=f"ticket-{user.name.lower()}",
-            category=category,
+            category=self.category,
             overwrites=overwrites,
             reason=f"Ticket opened by {user}",
         )
 
         # Belt-and-suspenders: if Discord still left the channel uncategorized, force the folder.
-        if channel.category_id != category.id:
+        if channel.category_id != self.category.id:
             await channel.edit(
-                category=category, reason="Place ticket under configured category"
+                category=self.category, reason="Place ticket under configured category"
             )
 
         ticket_id = await _next_ticket_id(interaction.client, guild)
@@ -623,8 +610,6 @@ class OpenTicketButton(discord.ui.View):
         )
 
         # ── 4) Send info embed + DM staff in the BACKGROUND ──
-        # This used to block the whole flow for 1-2 minutes because of guild.chunk().
-        # Now it runs as a background task so the user isn't kept waiting.
         async def _send_info_embed_and_dm():
             """Send the info embed + DM staff. Runs after the user already has confirmation."""
             try:
@@ -679,6 +664,11 @@ class OpenTicketButton(discord.ui.View):
                 value=f"{user.mention}\n`{user}` · `{user.id}`",
                 inline=False,
             )
+            
+            # Modal results fields
+            embed.add_field(name="📋 Subject / Topic", value=subject, inline=False)
+            embed.add_field(name="📝 Issue Description", value=description, inline=False)
+
             embed.add_field(name="Ticket #", value=f"`#{ticket_id}`", inline=True)
             embed.add_field(name="Status", value="`NEW`", inline=True)
             embed.add_field(name="Staff alerts", value=notify_field, inline=False)
@@ -690,8 +680,66 @@ class OpenTicketButton(discord.ui.View):
                 print(f"[tickets] Embed/button send failed: {exc}")
                 traceback.print_exc()
 
-        # Fire-and-forget — user already has confirmation, this just finishes the polish.
+        # Fire-and-forget background task
         asyncio.create_task(_send_info_embed_and_dm())
+
+
+# ── OPEN TICKET BUTTON ────────────────────────────────────────
+# This button appears in the ticket panel message.
+# Users click it to trigger the TicketReasonModal.
+class OpenTicketButton(discord.ui.View):
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="🎫 Open a Ticket",
+        style=discord.ButtonStyle.primary,  # Blue button
+        custom_id="open_ticket",
+    )
+    async def open_ticket(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        guild = interaction.guild
+        user = interaction.user
+        if guild is None:
+            return
+
+        # ── Find the ticket category ──────────────────────────
+        db = interaction.client.db_manager
+        cat_new_id = await db.get_setting_value(guild.id, "ticket_new_category_id", TICKET_NEW_CATEGORY_ID)
+        cat_fallback_id = await db.get_setting_value(guild.id, "ticket_category_id", TICKET_CATEGORY_ID)
+
+        # Tickets will be created inside this category folder
+        category = await _pick_category(
+            guild,
+            interaction.client,
+            _safe_category_id(cat_new_id),
+            _safe_category_id(cat_fallback_id),
+        )
+
+        if category is None:
+            await interaction.response.send_message(
+                "❌ **Ticket category not found.** Ask an admin to set it up using `!set_new_ticket_category` or `!set_ticket_category`.",
+                ephemeral=True,
+            )
+            return
+
+        # ── Check if user already has an open ticket ──────────
+        # We look for a channel that starts with "ticket-" and has their name
+        existing = discord.utils.get(
+            guild.text_channels, name=f"ticket-{user.name.lower()}"
+        )
+        if existing:
+            await interaction.response.send_message(
+                f"❌ You already have an open ticket: {existing.mention}",
+                ephemeral=True,  # Only the user can see this message
+            )
+            return
+
+        # Trigger the reason modal to collect context before creating channel
+        modal = TicketReasonModal(category)
+        await interaction.response.send_modal(modal)
 
 
 # ── TICKETS COG ───────────────────────────────────────────────
